@@ -1,0 +1,24 @@
+{
+  "id": "ddg",
+  "uiHints": {
+    "webSearch.region": {
+      "label": "DuckDuckGo Region",
+      "help": "Optional DuckDuckGo region code such as us-en, id-en, uk-en, or wt-wt."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "region": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

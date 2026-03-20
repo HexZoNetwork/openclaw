@@ -415,4 +415,100 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
 
     expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
   });
+
+  it("inherits channel-level party groups for listed participants in multi-account setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          groups: {
+            "-100123": {
+              requireMention: false,
+              party: {
+                participants: [{ accountId: "default" }, { accountId: "dev" }],
+              },
+            },
+          },
+          accounts: {
+            default: { botToken: "123:default" },
+            dev: { botToken: "456:dev" },
+            ops: { botToken: "789:ops" },
+          },
+        },
+      },
+    };
+
+    expect(resolveTelegramAccount({ cfg, accountId: "default" }).config.groups).toEqual({
+      "-100123": {
+        requireMention: false,
+        party: {
+          participants: [{ accountId: "default" }, { accountId: "dev" }],
+        },
+      },
+    });
+    expect(resolveTelegramAccount({ cfg, accountId: "dev" }).config.groups).toEqual({
+      "-100123": {
+        requireMention: false,
+        party: {
+          participants: [{ accountId: "default" }, { accountId: "dev" }],
+        },
+      },
+    });
+    expect(resolveTelegramAccount({ cfg, accountId: "ops" }).config.groups).toBeUndefined();
+  });
+
+  it("merges inherited party groups with account-level overrides in multi-account setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          groups: {
+            "-100123": {
+              requireMention: false,
+              party: {
+                participants: [{ accountId: "default" }, { accountId: "dev" }],
+              },
+              topics: {
+                "77": {
+                  requireMention: false,
+                },
+              },
+            },
+          },
+          accounts: {
+            default: { botToken: "123:default" },
+            dev: {
+              botToken: "456:dev",
+              groups: {
+                "-100123": {
+                  enabled: true,
+                  topics: {
+                    "88": {
+                      requireMention: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(resolveTelegramAccount({ cfg, accountId: "dev" }).config.groups).toEqual({
+      "-100123": {
+        requireMention: false,
+        enabled: true,
+        party: {
+          participants: [{ accountId: "default" }, { accountId: "dev" }],
+        },
+        topics: {
+          "77": {
+            requireMention: false,
+          },
+          "88": {
+            requireMention: true,
+          },
+        },
+      },
+    });
+  });
 });

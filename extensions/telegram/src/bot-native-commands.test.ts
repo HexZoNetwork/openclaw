@@ -150,9 +150,13 @@ describe("registerTelegramNativeCommands", () => {
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toHaveLength(100);
-    expect(registeredCommands).toEqual(customCommands.slice(0, 100));
+    expect(registeredCommands[0]).toEqual({
+      command: "addtoken",
+      description: "Add Telegram bot tokens to this config",
+    });
+    expect(registeredCommands.slice(1)).toEqual(customCommands.slice(0, 99));
     expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
+      "Telegram limits bots to 100 commands. 121 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
     );
   });
 

@@ -1,0 +1,52 @@
+{
+  // Minimal Telegram multi-bot party example for this fork.
+  // Copy into ~/.openclaw/openclaw.json (or merge the parts you need).
+  "agents": {
+    "list": [
+      {
+        "id": "alpha",
+        "default": true,
+        "model": "openai/gpt-5-mini",
+      },
+      {
+        "id": "beta",
+        "model": "openai/gpt-5-mini",
+      },
+    ],
+  },
+  "channels": {
+    "telegram": {
+      "dmPolicy": "open",
+      "groupPolicy": "open",
+      "accounts": {
+        "alpha-bot": {
+          "botToken": "123456:replace-alpha-bot-token",
+        },
+        "beta-bot": {
+          "botToken": "123456:replace-beta-bot-token",
+        },
+      },
+      "groups": {
+        "-1001234567890": {
+          "requireMention": false,
+          "party": {
+            "mode": "least-recent",
+            "cooldownSeconds": 45,
+            "participants": [
+              {
+                "accountId": "alpha-bot",
+                "agentId": "alpha",
+                "keywords": ["wizard", "magic", "story"],
+              },
+              {
+                "accountId": "beta-bot",
+                "agentId": "beta",
+                "keywords": ["code", "debug", "logic"],
+              },
+            ],
+          },
+        },
+      },
+    },
+  },
+}

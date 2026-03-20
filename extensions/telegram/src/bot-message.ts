@@ -1,6 +1,6 @@
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
@@ -8,9 +8,11 @@ import {
   type BuildTelegramMessageContextParams,
   type TelegramMediaRef,
 } from "./bot-message-context.js";
+import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import { dispatchTelegramPartySyntheticMessage } from "./group-party-bus.js";
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -52,11 +54,18 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     opts,
   } = deps;
 
+  const sleep = async (delayMs: number) => {
+    if (delayMs <= 0) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  };
+
   return async (
     primaryCtx: TelegramContext,
     allMedia: TelegramMediaRef[],
     storeAllowFrom: string[],
-    options?: { messageIdOverride?: string; forceWasMentioned?: boolean },
+    options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
   ) => {
     const context = await buildTelegramMessageContext({
@@ -86,7 +95,11 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       return;
     }
     try {
-      await dispatchTelegramMessage({
+      // Show activity immediately so queue/model wait does not look like a dead bot.
+      if (typeof context.sendTyping === "function") {
+        await context.sendTyping().catch(() => undefined);
+      }
+      const dispatchResult = await dispatchTelegramMessage({
         context,
         bot,
         cfg,
@@ -98,8 +111,46 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         telegramDeps,
         opts,
       });
+      const maxAutoReplies = Math.max(0, context.partyConfig?.autoReplies ?? 1);
+      const participantAccountIds =
+        context.partyConfig?.participants
+          .map((participant) => participant.accountId)
+          .filter((participantId) => participantId !== account.accountId) ?? [];
+      const autoChatterDepth = context.autoChatterDepth ?? 0;
+      if (
+        !context.isGroup ||
+        maxAutoReplies === 0 ||
+        autoChatterDepth >= maxAutoReplies ||
+        participantAccountIds.length === 0 ||
+        !dispatchResult.hasFinalResponse ||
+        !dispatchResult.finalAnswerText?.trim()
+      ) {
+        return;
+      }
+      const autoReplyDelayMs = Math.max(0, context.partyConfig?.autoReplyDelayMs ?? 1200);
+      await sleep(autoReplyDelayMs);
+      const speakerLabel =
+        primaryCtx.me?.first_name?.trim() || primaryCtx.me?.username?.trim() || account.accountId;
+      await dispatchTelegramPartySyntheticMessage({
+        participantAccountIds,
+        message: {
+          chatId: context.chatId,
+          chatType: context.msg.chat.type === "supergroup" ? "supergroup" : "group",
+          chatTitle:
+            "title" in context.msg.chat && typeof context.msg.chat.title === "string"
+              ? context.msg.chat.title
+              : undefined,
+          messageThreadId: context.resolvedThreadId,
+          text: `${speakerLabel}: ${dispatchResult.finalAnswerText.trim()}`,
+          speakerAccountId: account.accountId,
+          speakerName: primaryCtx.me?.first_name,
+          speakerUsername: primaryCtx.me?.username,
+          autoChatterDepth: autoChatterDepth + 1,
+        },
+      });
     } catch (err) {
       runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
+      logVerbose(`telegram party auto-chatter aborted: ${String(err)}`);
       try {
         await bot.api.sendMessage(
           context.chatId,

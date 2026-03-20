@@ -8,6 +8,7 @@ import {
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "brave", id: "brave", order: 10 },
+  { pluginId: "ddg", id: "ddg", order: 15 },
   { pluginId: "google", id: "gemini", order: 20 },
   { pluginId: "xai", id: "grok", order: 30 },
   { pluginId: "moonshot", id: "kimi", order: 40 },
@@ -83,6 +84,7 @@ describe("resolvePluginWebSearchProviders", () => {
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
+      "ddg:ddg",
       "google:gemini",
       "xai:grok",
       "moonshot:kimi",

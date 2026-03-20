@@ -218,6 +218,32 @@ export type TelegramAccountConfig = {
   ackReaction?: string;
 };
 
+export type TelegramPartyParticipantConfig = {
+  /** Telegram account ID that participates in the group party. */
+  accountId: string;
+  /** Optional agent override when this participant is selected to reply. */
+  agentId?: string;
+  /** Optional keywords that make this participant more likely to reply. */
+  keywords?: string[];
+  /** Relative weight for tie-breaking. Higher values make replies more likely. */
+  weight?: number;
+};
+
+export type TelegramPartyConfig = {
+  /** If false, disable party routing for this group/topic. */
+  enabled?: boolean;
+  /** Accounts that may speak in this group/topic. */
+  participants?: TelegramPartyParticipantConfig[];
+  /** Selection strategy for choosing the next speaker. */
+  mode?: "round-robin" | "least-recent" | "random";
+  /** Cooldown before the same participant should speak again. Default: 45 seconds. */
+  cooldownSeconds?: number;
+  /** Number of automatic follow-up replies after a user-triggered turn. Default: 1. */
+  autoReplies?: number;
+  /** Delay before automatic follow-up replies fire. Default: 1200 ms. */
+  autoReplyDelayMs?: number;
+};
+
 export type TelegramTopicConfig = {
   requireMention?: boolean;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
@@ -234,6 +260,8 @@ export type TelegramTopicConfig = {
   disableAudioPreflight?: boolean;
   /** Route this topic to a specific agent (overrides group-level and binding routing). */
   agentId?: string;
+  /** Multi-bot party routing overrides for this topic. */
+  party?: TelegramPartyConfig;
 };
 
 export type TelegramGroupConfig = {
@@ -255,6 +283,8 @@ export type TelegramGroupConfig = {
   systemPrompt?: string;
   /** If true, skip automatic voice-note transcription for mention detection in this group. */
   disableAudioPreflight?: boolean;
+  /** Multi-bot party routing for this group. */
+  party?: TelegramPartyConfig;
 };
 
 export type TelegramDirectConfig = {

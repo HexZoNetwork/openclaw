@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setupWizardCommandMock = vi.fn();
+const onboardTelegramPartyCommandMock = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -41,6 +42,10 @@ vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: setupWizardCommandMock,
 }));
 
+vi.mock("../../commands/onboard-telegram-party.js", () => ({
+  onboardTelegramPartyCommand: onboardTelegramPartyCommandMock,
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
@@ -61,6 +66,7 @@ describe("registerOnboardCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupWizardCommandMock.mockResolvedValue(undefined);
+    onboardTelegramPartyCommandMock.mockResolvedValue(undefined);
   });
 
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
@@ -161,5 +167,35 @@ describe("registerOnboardCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith("Error: setup failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("routes onboard telegram-party flags to the specialized command", async () => {
+    await runCli([
+      "onboard",
+      "telegram-party",
+      "--tokens",
+      "111:token_alpha,222:token_beta",
+      "--group-id",
+      "-1001234567890",
+      "--mode",
+      "round-robin",
+      "--cooldown-seconds",
+      "12",
+      "--require-mention",
+      "true",
+      "--non-interactive",
+    ]);
+
+    expect(onboardTelegramPartyCommandMock).toHaveBeenCalledWith(
+      {
+        tokens: "111:token_alpha,222:token_beta",
+        groupId: "-1001234567890",
+        mode: "round-robin",
+        cooldownSeconds: 12,
+        requireMention: true,
+        nonInteractive: false,
+      },
+      runtime,
+    );
   });
 });

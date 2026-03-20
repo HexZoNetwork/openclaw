@@ -9,6 +9,7 @@ import {
   resolveAccountWithDefaultFallback,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { TelegramGroupConfig, TelegramTopicConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/infra-runtime";
 import {
   listBoundAccountIds,
@@ -53,6 +54,100 @@ export type ResolvedTelegramAccount = {
   tokenSource: "env" | "tokenFile" | "config" | "none";
   config: TelegramAccountConfig;
 };
+
+function groupIncludesPartyParticipant(
+  group: TelegramGroupConfig | undefined,
+  accountId: string,
+): boolean {
+  if (
+    group?.party?.participants?.some(
+      (participant: { accountId: string }) => participant.accountId === accountId,
+    )
+  ) {
+    return true;
+  }
+  return Object.values(group?.topics ?? {}).some((topic: TelegramTopicConfig | undefined) =>
+    topic?.party?.participants?.some(
+      (participant: { accountId: string }) => participant.accountId === accountId,
+    ),
+  );
+}
+
+function mergeTelegramTopicConfig(
+  base: TelegramTopicConfig | undefined,
+  override: TelegramTopicConfig | undefined,
+): TelegramTopicConfig | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  return {
+    ...base,
+    ...override,
+  };
+}
+
+function mergeTelegramGroupConfig(
+  base: TelegramGroupConfig,
+  override: TelegramGroupConfig | undefined,
+): TelegramGroupConfig {
+  if (!override) {
+    return base;
+  }
+  const topicIds = Array.from(
+    new Set([...Object.keys(base.topics ?? {}), ...Object.keys(override.topics ?? {})]),
+  );
+  const mergedTopics =
+    topicIds.length > 0
+      ? Object.fromEntries(
+          topicIds
+            .map(
+              (topicId) =>
+                [
+                  topicId,
+                  mergeTelegramTopicConfig(base.topics?.[topicId], override.topics?.[topicId]),
+                ] as const,
+            )
+            .filter((entry): entry is readonly [string, TelegramTopicConfig] => Boolean(entry[1])),
+        )
+      : undefined;
+  return {
+    ...base,
+    ...override,
+    ...(mergedTopics ? { topics: mergedTopics } : {}),
+  };
+}
+
+function mergeTelegramGroupsForAccount(params: {
+  accountId: string;
+  channelGroups?: TelegramAccountConfig["groups"];
+  accountGroups?: TelegramAccountConfig["groups"];
+  isMultiAccount: boolean;
+}): TelegramAccountConfig["groups"] | undefined {
+  const { accountId, channelGroups, accountGroups, isMultiAccount } = params;
+  if (!isMultiAccount) {
+    return accountGroups ?? channelGroups;
+  }
+
+  const inheritedChannelGroups = Object.fromEntries(
+    Object.entries(channelGroups ?? {}).filter(([, group]) =>
+      groupIncludesPartyParticipant(group, accountId),
+    ),
+  );
+  const hasInheritedChannelGroups = Object.keys(inheritedChannelGroups).length > 0;
+  if (!accountGroups) {
+    return hasInheritedChannelGroups ? inheritedChannelGroups : undefined;
+  }
+
+  const merged = { ...accountGroups };
+  for (const [groupId, groupConfig] of Object.entries(inheritedChannelGroups)) {
+    const existing = merged[groupId];
+    merged[groupId] = existing ? mergeTelegramGroupConfig(groupConfig, existing) : groupConfig;
+  }
+  return merged;
+}
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   return listConfiguredAccountIdsFromSection({
@@ -132,12 +227,20 @@ export function mergeTelegramAccountConfig(
   // accounts that don't have their own `groups` config.  A bot that is not a
   // member of a configured group will fail when handling group messages, and
   // this failure disrupts message delivery for *all* accounts.
+  // Party routing is the exception: if a channel-level group/topic explicitly
+  // lists this account as a participant, inherit just that group config so the
+  // speaker-selection metadata stays visible to the participating bot.
   // Single-account setups keep backward compat: channel-level groups still
   // applies when the account has no override.
   // See: https://github.com/openclaw/openclaw/issues/30673
   const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
   const isMultiAccount = configuredAccountIds.length > 1;
-  const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
+  const groups = mergeTelegramGroupsForAccount({
+    accountId,
+    channelGroups,
+    accountGroups: account.groups,
+    isMultiAccount,
+  });
 
   return { ...base, ...account, groups };
 }

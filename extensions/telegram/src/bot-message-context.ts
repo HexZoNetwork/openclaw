@@ -24,6 +24,7 @@ import {
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { resolveTelegramPartyConfig, resolveTelegramPartyDecision } from "./group-party.js";
 import {
   buildTelegramStatusReactionVariants,
   resolveTelegramAllowedEmojiReactions,
@@ -96,9 +97,18 @@ export const buildTelegramMessageContext = async ({
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
   ): boolean => candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
   const isNamedAccountFallback = requiresExplicitAccountBinding(route);
+  const partyConfig = isGroup
+    ? resolveTelegramPartyConfig({
+        groupConfig: groupConfig as TelegramGroupConfig | undefined,
+        topicConfig,
+      })
+    : null;
+  const partyAllowsCurrentAccount = Boolean(
+    partyConfig?.participants.some((participant) => participant.accountId === account.accountId),
+  );
   // Named-account groups still require an explicit binding; DMs get a
   // per-account fallback session key below to preserve isolation.
-  if (isNamedAccountFallback && isGroup) {
+  if (isNamedAccountFallback && isGroup && !partyAllowsCurrentAccount) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -200,6 +210,29 @@ export const buildTelegramMessageContext = async ({
   ) {
     return null;
   }
+
+  if (isGroup) {
+    const partyDecision = resolveTelegramPartyDecision({
+      cfg: freshCfg,
+      groupConfig: groupConfig as TelegramGroupConfig | undefined,
+      topicConfig,
+      route,
+      accountId: account.accountId,
+      chatId,
+      messageId: msg.message_id,
+      messageText: msg.text ?? ("caption" in msg ? msg.caption : undefined),
+      messageTimestampMs: (msg.date ?? Math.floor(Date.now() / 1000)) * 1000,
+      messageThreadId: resolvedThreadId,
+    });
+    if (partyDecision.kind === "skip") {
+      logVerbose(
+        `telegram: party routing skipped account=${account.accountId} selected=${partyDecision.selectedAccountId} chat=${chatId}${resolvedThreadId != null ? ` topic=${resolvedThreadId}` : ""}`,
+      );
+      return null;
+    }
+    route = partyDecision.route;
+  }
+
   const ensureConfiguredBindingReady = async (): Promise<boolean> => {
     if (!configuredBinding) {
       return true;
@@ -458,6 +491,8 @@ export const buildTelegramMessageContext = async ({
     removeAckAfterReply,
     statusReactionController,
     accountId: account.accountId,
+    partyConfig: partyConfig ?? undefined,
+    autoChatterDepth: options?.autoChatterDepth ?? 0,
   };
 };
 

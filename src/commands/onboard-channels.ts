@@ -35,7 +35,10 @@ import type {
   ChannelOnboardingPostWriteHook,
   SetupChannelsOptions,
 } from "./channel-setup/types.js";
+import { configureTelegramPartyConfig } from "./onboard-telegram-party.js";
 import type { ChannelChoice } from "./onboard-types.js";
+
+const TELEGRAM_PARTY_QUICKSTART_VALUE = "__telegram_party__" as const;
 
 type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
 
@@ -536,6 +539,33 @@ export async function setupChannels(
     }
   };
 
+  const configureTelegramPartySelection = async () => {
+    const result = await configureTelegramPartyConfig({
+      cfg: next,
+      opts: {
+        nonInteractive: false,
+      },
+      prompter,
+    });
+    next = result.cfg;
+    await prompter.note(
+      [
+        `Telegram Party group: ${result.groupId}`,
+        result.addedAccountIds.length > 0
+          ? `Added accounts: ${result.addedAccountIds.join(", ")}`
+          : "",
+        result.duplicateAccountIds.length > 0
+          ? `Already configured: ${result.duplicateAccountIds.join(", ")}`
+          : "",
+        result.failedTokens.length > 0 ? `Lookup failed: ${result.failedTokens.join(" | ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      "Telegram Party",
+    );
+    addSelection("telegram");
+  };
+
   const resolveDisabledHint = (channel: ChannelChoice): string | undefined => {
     if (
       typeof (next.channels as Record<string, { enabled?: boolean }> | undefined)?.[channel]
@@ -851,6 +881,11 @@ export async function setupChannels(
     const choice = (await prompter.select({
       message: "Select channel (QuickStart)",
       options: [
+        {
+          value: TELEGRAM_PARTY_QUICKSTART_VALUE,
+          label: "Telegram Party",
+          hint: "Multiple Telegram bots in one group with shared party routing",
+        },
         ...buildSelectionOptions(entries),
         {
           value: "__skip__",
@@ -859,8 +894,10 @@ export async function setupChannels(
         },
       ],
       initialValue: quickstartDefault,
-    })) as ChannelChoice | "__skip__";
-    if (choice !== "__skip__") {
+    })) as ChannelChoice | "__skip__" | typeof TELEGRAM_PARTY_QUICKSTART_VALUE;
+    if (choice === TELEGRAM_PARTY_QUICKSTART_VALUE) {
+      await configureTelegramPartySelection();
+    } else if (choice !== "__skip__") {
       await handleChannelChoice(choice);
     }
   } else {
@@ -871,6 +908,11 @@ export async function setupChannels(
       const choice = (await prompter.select({
         message: "Select a channel",
         options: [
+          {
+            value: TELEGRAM_PARTY_QUICKSTART_VALUE,
+            label: "Telegram Party",
+            hint: "Multiple Telegram bots in one group with shared party routing",
+          },
           ...buildSelectionOptions(entries),
           {
             value: doneValue,
@@ -879,9 +921,13 @@ export async function setupChannels(
           },
         ],
         initialValue,
-      })) as ChannelChoice | typeof doneValue;
+      })) as ChannelChoice | typeof doneValue | typeof TELEGRAM_PARTY_QUICKSTART_VALUE;
       if (choice === doneValue) {
         break;
+      }
+      if (choice === TELEGRAM_PARTY_QUICKSTART_VALUE) {
+        await configureTelegramPartySelection();
+        continue;
       }
       await handleChannelChoice(choice);
     }

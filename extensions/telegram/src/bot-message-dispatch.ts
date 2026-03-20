@@ -512,6 +512,7 @@ export const dispatchTelegramMessage = async ({
 
   let queuedFinal = false;
   let hadErrorReplyFailureOrSkip = false;
+  let finalAnswerText: string | undefined;
 
   if (statusReactionController) {
     void statusReactionController.setThinking();
@@ -619,6 +620,9 @@ export const dispatchTelegramMessage = async ({
               }
               continue;
             }
+            if (info.kind === "final" && segment.text.trim()) {
+              finalAnswerText = segment.text.trim();
+            }
             if (info.kind === "final") {
               if (reasoningLane.hasStreamedMessage) {
                 activePreviewLifecycleByLane.reasoning = "complete";
@@ -647,7 +651,8 @@ export const dispatchTelegramMessage = async ({
             await reasoningLane.stream?.stop();
             reasoningStepState.resetForNextStep();
           }
-          const canSendAsIs = reply.hasMedia || reply.text.length > 0;
+          const plainReplyText = reply.text ?? "";
+          const canSendAsIs = reply.hasMedia || plainReplyText.length > 0;
           if (!canSendAsIs) {
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
@@ -655,6 +660,9 @@ export const dispatchTelegramMessage = async ({
             return;
           }
           await sendPayload(payload);
+          if (info.kind === "final" && plainReplyText.trim()) {
+            finalAnswerText = plainReplyText.trim();
+          }
           if (info.kind === "final") {
             await flushBufferedFinalAnswer();
           }
@@ -834,7 +842,7 @@ export const dispatchTelegramMessage = async ({
 
   if (!hasFinalResponse) {
     clearGroupHistory();
-    return;
+    return { hasFinalResponse: false, finalAnswerText: undefined };
   }
 
   if (statusReactionController) {
@@ -861,4 +869,8 @@ export const dispatchTelegramMessage = async ({
     });
   }
   clearGroupHistory();
+  return {
+    hasFinalResponse: true,
+    finalAnswerText: sentFallback || dispatchError ? undefined : finalAnswerText,
+  };
 };

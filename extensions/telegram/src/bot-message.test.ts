@@ -3,6 +3,7 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
+const dispatchTelegramPartySyntheticMessage = vi.hoisted(() => vi.fn());
 const upsertChannelPairingRequest = vi.hoisted(() =>
   vi.fn(async () => ({ code: "PAIRCODE", created: true })),
 );
@@ -15,13 +16,19 @@ vi.mock("./bot-message-dispatch.js", () => ({
   dispatchTelegramMessage,
 }));
 
+vi.mock("./group-party-bus.js", () => ({
+  dispatchTelegramPartySyntheticMessage,
+}));
+
 import { createTelegramMessageProcessor } from "./bot-message.js";
 
 describe("telegram bot message processor", () => {
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
+    dispatchTelegramPartySyntheticMessage.mockClear();
     upsertChannelPairingRequest.mockClear();
+    dispatchTelegramMessage.mockResolvedValue({ hasFinalResponse: true, finalAnswerText: "hi" });
   });
 
   const telegramDepsForTest = {
@@ -89,6 +96,85 @@ describe("telegram bot message processor", () => {
     await processSampleMessage(processMessage);
 
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("triggers party auto-chatter follow-up for group party replies", async () => {
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: -100123,
+      isGroup: true,
+      msg: { chat: { type: "supergroup", title: "Party" } },
+      resolvedThreadId: 99,
+      route: { sessionKey: "agent:main:main" },
+      partyConfig: {
+        participants: [{ accountId: "alpha" }, { accountId: "beta" }],
+      },
+      autoChatterDepth: 0,
+    });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      account: { accountId: "alpha" },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await processMessage(
+      {
+        me: { first_name: "Alpha", id: 1, is_bot: true, username: "alpha_bot" },
+        message: {
+          chat: { id: -100123, type: "supergroup", title: "Party" },
+          message_id: 456,
+        },
+      } as never,
+      [],
+      [],
+      {},
+    );
+
+    expect(dispatchTelegramPartySyntheticMessage).toHaveBeenCalledWith({
+      participantAccountIds: ["beta"],
+      message: expect.objectContaining({
+        chatId: -100123,
+        chatType: "supergroup",
+        chatTitle: "Party",
+        messageThreadId: 99,
+        text: "Alpha: hi",
+        speakerAccountId: "alpha",
+        speakerName: "Alpha",
+        speakerUsername: "alpha_bot",
+        autoChatterDepth: 1,
+      }),
+    });
+  });
+
+  it("stops party auto-chatter at configured depth", async () => {
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: -100123,
+      isGroup: true,
+      msg: { chat: { type: "supergroup", title: "Party" } },
+      route: { sessionKey: "agent:main:main" },
+      partyConfig: {
+        autoReplies: 1,
+        participants: [{ accountId: "alpha" }, { accountId: "beta" }],
+      },
+      autoChatterDepth: 1,
+    });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      account: { accountId: "alpha" },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await processMessage(
+      {
+        me: { first_name: "Alpha", id: 1, is_bot: true, username: "alpha_bot" },
+        message: {
+          chat: { id: -100123, type: "supergroup", title: "Party" },
+          message_id: 456,
+        },
+      } as never,
+      [],
+      [],
+      {},
+    );
+
+    expect(dispatchTelegramPartySyntheticMessage).not.toHaveBeenCalled();
   });
 
   it("skips dispatch when no context is produced", async () => {

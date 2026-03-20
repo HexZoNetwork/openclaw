@@ -81,6 +81,28 @@ export const TelegramTopicSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     agentId: z.string().optional(),
+    party: z
+      .object({
+        enabled: z.boolean().optional(),
+        participants: z
+          .array(
+            z
+              .object({
+                accountId: z.string(),
+                agentId: z.string().optional(),
+                keywords: z.array(z.string()).optional(),
+                weight: z.number().positive().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+        mode: z.enum(["round-robin", "least-recent", "random"]).optional(),
+        cooldownSeconds: z.number().int().nonnegative().optional(),
+        autoReplies: z.number().int().nonnegative().optional(),
+        autoReplyDelayMs: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -96,6 +118,28 @@ export const TelegramGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    party: z
+      .object({
+        enabled: z.boolean().optional(),
+        participants: z
+          .array(
+            z
+              .object({
+                accountId: z.string(),
+                agentId: z.string().optional(),
+                keywords: z.array(z.string()).optional(),
+                weight: z.number().positive().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+        mode: z.enum(["round-robin", "least-recent", "random"]).optional(),
+        cooldownSeconds: z.number().int().nonnegative().optional(),
+        autoReplies: z.number().int().nonnegative().optional(),
+        autoReplyDelayMs: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

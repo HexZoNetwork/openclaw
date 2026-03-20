@@ -115,6 +115,17 @@ describe("setupSearch", () => {
     expect(result.plugins?.entries?.brave?.enabled).toBe(true);
   });
 
+  it("sets provider for ddg without prompting for an API key", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "ddg",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("ddg");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
   it("sets provider and key for gemini", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({

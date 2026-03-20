@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
+import { onboardTelegramPartyCommand } from "../../commands/onboard-telegram-party.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -199,4 +200,57 @@ export function registerOnboardCommand(program: Command) {
       );
     });
   });
+
+  command
+    .command("telegram-party")
+    .description("Set up a multi-bot Telegram party group")
+    .option("--tokens <csv>", "Comma-separated Telegram bot tokens")
+    .option("--group-id <id>", "Telegram group ID (example: -1001234567890)")
+    .option("--mode <mode>", "Party mode: round-robin|least-recent|random")
+    .option("--cooldown-seconds <seconds>", "Cooldown before the same bot speaks again")
+    .option("--require-mention <bool>", "Require mentions in the configured group: true|false")
+    .option("--non-interactive", "Run without prompts", false)
+    .action(async (opts, commandRuntime) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const parentOptions =
+          commandRuntime &&
+          typeof commandRuntime === "object" &&
+          "parent" in commandRuntime &&
+          commandRuntime.parent &&
+          typeof commandRuntime.parent === "object" &&
+          "opts" in commandRuntime.parent &&
+          typeof commandRuntime.parent.opts === "function"
+            ? (commandRuntime.parent.opts() as Record<string, unknown>)
+            : {};
+        const cooldownSeconds =
+          typeof opts.cooldownSeconds === "string"
+            ? Number.parseInt(opts.cooldownSeconds, 10)
+            : undefined;
+        const normalizedRequireMention =
+          typeof opts.requireMention === "string"
+            ? ["true", "yes", "y", "1"].includes(opts.requireMention.trim().toLowerCase())
+            : undefined;
+        await onboardTelegramPartyCommand(
+          {
+            tokens: opts.tokens as string | undefined,
+            groupId: opts.groupId as string | undefined,
+            mode:
+              opts.mode === "round-robin" || opts.mode === "least-recent" || opts.mode === "random"
+                ? opts.mode
+                : parentOptions.mode === "round-robin" ||
+                    parentOptions.mode === "least-recent" ||
+                    parentOptions.mode === "random"
+                  ? parentOptions.mode
+                  : undefined,
+            cooldownSeconds:
+              typeof cooldownSeconds === "number" && Number.isFinite(cooldownSeconds)
+                ? cooldownSeconds
+                : undefined,
+            requireMention: normalizedRequireMention,
+            nonInteractive: Boolean(opts.nonInteractive ?? parentOptions.nonInteractive),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }

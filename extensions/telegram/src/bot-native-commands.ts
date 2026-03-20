@@ -3,9 +3,15 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/channel-runtime";
 import { recordInboundSessionMetaSafe } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  authorizeConfigWrite,
+  formatConfigWriteDeniedMessage,
+  resolveExplicitConfigWriteTarget,
+} from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
@@ -38,6 +44,7 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -75,8 +82,20 @@ import {
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
+import {
+  buildUniqueTelegramAccountId,
+  fetchTelegramBotIdentity,
+  listConfiguredTelegramTokenOwners,
+  parseTelegramBotTokens,
+  TELEGRAM_BOT_TOKEN_PATTERN,
+  type TelegramGetMeResult,
+} from "./token-provisioning.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const TELEGRAM_ADDTOKEN_COMMAND = {
+  command: "addtoken",
+  description: "Add Telegram bot tokens to this config",
+} as const;
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -437,6 +456,7 @@ export const registerTelegramNativeCommands = ({
     }
   };
   const allCommandsFull: Array<{ command: string; description: string }> = [
+    TELEGRAM_ADDTOKEN_COMMAND,
     ...nativeCommands
       .map((command) => {
         const normalized = normalizeTelegramCommandName(command.name);
@@ -576,6 +596,182 @@ export const registerTelegramNativeCommands = ({
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
+      bot.command(TELEGRAM_ADDTOKEN_COMMAND.command, async (ctx: TelegramNativeCommandContext) => {
+        const msg = ctx.message;
+        if (!msg) {
+          return;
+        }
+        if (shouldSkipUpdate(ctx)) {
+          return;
+        }
+        const runtimeCfg = loadFreshRuntimeConfig();
+        const runtimeTelegramCfg = resolveFreshTelegramConfig(runtimeCfg);
+        const auth = await resolveTelegramCommandAuth({
+          msg,
+          bot,
+          cfg: runtimeCfg,
+          accountId,
+          telegramCfg: runtimeTelegramCfg,
+          readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
+          allowFrom,
+          groupAllowFrom,
+          useAccessGroups,
+          resolveGroupPolicy,
+          resolveTelegramGroupConfig,
+          requireAuth: true,
+        });
+        if (!auth) {
+          return;
+        }
+        const commandText = ctx.match?.trim() ?? "";
+        const tokens = parseTelegramBotTokens(commandText);
+        const threadParams = buildTelegramThreadParams(
+          resolveTelegramThreadSpec({
+            isGroup: auth.isGroup,
+            isForum: auth.isForum,
+            messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+          }),
+        );
+        if (tokens.length === 0) {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(
+                auth.chatId,
+                "Usage: /addtoken token1,token2,token3",
+                threadParams ?? {},
+              ),
+          });
+          return;
+        }
+        const writePolicy = authorizeConfigWrite({
+          cfg: runtimeCfg,
+          origin: { channelId: "telegram", accountId },
+          target: resolveExplicitConfigWriteTarget({ channelId: "telegram", accountId }),
+        });
+        if (!writePolicy.allowed) {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(
+                auth.chatId,
+                formatConfigWriteDeniedMessage({
+                  result: writePolicy,
+                  fallbackChannelId: "telegram",
+                }),
+                threadParams ?? {},
+              ),
+          });
+          return;
+        }
+
+        const nextCfg: OpenClawConfig = structuredClone(runtimeCfg);
+        const telegramChannel = (nextCfg.channels ??= {}).telegram ?? {};
+        nextCfg.channels.telegram = telegramChannel;
+        const accounts = (telegramChannel.accounts ??= {});
+        const usedAccountIds = new Set<string>(
+          Object.keys(accounts).map((existingAccountId) => normalizeAccountId(existingAccountId)),
+        );
+        const tokenOwners = listConfiguredTelegramTokenOwners(runtimeCfg);
+        const added: string[] = [];
+        const duplicates: string[] = [];
+        const invalid: string[] = [];
+        const failed: string[] = [];
+
+        for (const token of tokens) {
+          if (!TELEGRAM_BOT_TOKEN_PATTERN.test(token)) {
+            invalid.push(token);
+            continue;
+          }
+          if (tokenOwners.has(token)) {
+            duplicates.push(tokenOwners.get(token) ?? "existing");
+            continue;
+          }
+          let identity: TelegramGetMeResult;
+          try {
+            identity = await fetchTelegramBotIdentity(token);
+          } catch (error) {
+            failed.push(`${token.slice(0, 8)}... (${String(error)})`);
+            continue;
+          }
+          const accountKeyCandidate =
+            identity.username?.toLowerCase() ??
+            (typeof identity.id === "number" ? `bot-${identity.id}` : "telegram-bot");
+          const nextAccountId = buildUniqueTelegramAccountId({
+            candidate: accountKeyCandidate,
+            usedAccountIds,
+          });
+          accounts[nextAccountId] = {
+            ...(accounts[nextAccountId] ?? {}),
+            enabled: true,
+            botToken: token,
+            ...(identity.firstName ? { name: identity.firstName } : {}),
+          };
+          tokenOwners.set(token, nextAccountId);
+          added.push(nextAccountId);
+        }
+
+        if (auth.isGroup && added.length > 0) {
+          const groups = (telegramChannel.groups ??= {});
+          const chatKey = String(auth.chatId);
+          const groupEntry = (groups[chatKey] ??= {});
+          const groupParty = (groupEntry.party ??= {});
+          const participants = (groupParty.participants ??= []);
+          const existingParticipants = new Set(
+            participants
+              .map((participant) =>
+                participant && typeof participant.accountId === "string"
+                  ? normalizeAccountId(participant.accountId)
+                  : "",
+              )
+              .filter(Boolean),
+          );
+          for (const addedAccountId of added) {
+            if (existingParticipants.has(addedAccountId)) {
+              continue;
+            }
+            participants.push({ accountId: addedAccountId });
+            existingParticipants.add(addedAccountId);
+          }
+        }
+
+        if (added.length === 0) {
+          const parts = [
+            invalid.length > 0 ? `Invalid: ${invalid.length}` : "",
+            duplicates.length > 0 ? `Duplicate: ${duplicates.length}` : "",
+            failed.length > 0 ? `Failed: ${failed.length}` : "",
+          ].filter(Boolean);
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(
+                auth.chatId,
+                parts.length > 0 ? `No tokens added. ${parts.join(" · ")}` : "No tokens added.",
+                threadParams ?? {},
+              ),
+          });
+          return;
+        }
+
+        await writeConfigFile(nextCfg);
+
+        const replyLines = [
+          `Added ${added.length} Telegram bot token${added.length === 1 ? "" : "s"}: ${added.join(", ")}`,
+          auth.isGroup ? "New accounts were also appended to this group's party participants." : "",
+          invalid.length > 0 ? `Invalid token format: ${invalid.length}` : "",
+          duplicates.length > 0 ? `Already configured: ${duplicates.join(", ")}` : "",
+          failed.length > 0 ? `Lookup failed: ${failed.join(" | ")}` : "",
+        ].filter(Boolean);
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () => bot.api.sendMessage(auth.chatId, replyLines.join("\n"), threadParams ?? {}),
+        });
+      });
+
       for (const command of nativeCommands) {
         const normalizedCommandName = normalizeTelegramCommandName(command.name);
         bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {

@@ -36,6 +36,10 @@ import {
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
+import {
+  allocateTelegramPartySyntheticMessageId,
+  registerTelegramPartySyntheticHandler,
+} from "./group-party-bus.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -508,6 +512,67 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     telegramDeps,
   });
 
+  const buildSyntheticSpeakerId = (value: string) => {
+    let hash = 0;
+    for (let index = 0; index < value.length; index += 1) {
+      hash = (hash * 33 + value.charCodeAt(index)) >>> 0;
+    }
+    return 2_000_000_000 + (hash % 900_000_000);
+  };
+
+  const unregisterPartySyntheticHandler = registerTelegramPartySyntheticHandler(
+    account.accountId,
+    async (message) => {
+      const storeAllowFrom = await telegramDeps
+        .readChannelAllowFromStore("telegram", process.env, account.accountId)
+        .catch(() => []);
+      const syntheticChatId =
+        typeof message.chatId === "number" ? message.chatId : Number(message.chatId);
+      const syntheticChatTitle = message.chatTitle?.trim() || "Party";
+      const syntheticChat =
+        message.chatType === "supergroup"
+          ? {
+              id: syntheticChatId,
+              type: "supergroup" as const,
+              title: syntheticChatTitle,
+            }
+          : {
+              id: syntheticChatId,
+              type: "group" as const,
+              title: syntheticChatTitle,
+            };
+      await processMessage(
+        {
+          message: {
+            message_id: allocateTelegramPartySyntheticMessageId(),
+            date: Math.floor(Date.now() / 1000),
+            chat: syntheticChat,
+            from: {
+              id: buildSyntheticSpeakerId(message.speakerAccountId),
+              is_bot: true,
+              first_name: message.speakerName?.trim() || message.speakerAccountId,
+              ...(message.speakerUsername?.trim()
+                ? { username: message.speakerUsername.trim() }
+                : {}),
+            },
+            text: message.text,
+            ...(message.messageThreadId != null
+              ? { message_thread_id: message.messageThreadId }
+              : {}),
+          },
+          me: bot.botInfo,
+          getFile: async () => ({}),
+        },
+        [],
+        storeAllowFrom,
+        {
+          forceWasMentioned: true,
+          autoChatterDepth: message.autoChatterDepth,
+        },
+      );
+    },
+  );
+
   registerTelegramNativeCommands({
     bot,
     cfg,
@@ -551,6 +616,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
     threadBindingManager?.stop();
+    unregisterPartySyntheticHandler();
     return originalStop(...args);
   }) as typeof bot.stop;
 

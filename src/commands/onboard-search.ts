@@ -29,6 +29,10 @@ type SearchProviderEntry = {
   applySelectionConfig?: PluginWebSearchProviderEntry["applySelectionConfig"];
 };
 
+function providerRequiresApiKey(entry: SearchProviderEntry): boolean {
+  return entry.envKeys.length > 0;
+}
+
 export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] =
   resolvePluginWebSearchProviders({
     bundledAllowlistCompat: true,
@@ -217,6 +221,9 @@ export async function setupSearch(
   }
 
   const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === choice)!;
+  if (!providerRequiresApiKey(entry)) {
+    return preserveDisabledState(config, applyProviderOnly(config, choice));
+  }
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);

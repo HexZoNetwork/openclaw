@@ -329,6 +329,74 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
   });
 
+  it("includes Telegram Party in the QuickStart channel picker", async () => {
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select channel (QuickStart)") {
+        const quickstartOptions = options as Array<{ value: string; label: string; hint?: string }>;
+        expect(quickstartOptions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              value: "__telegram_party__",
+              label: "Telegram Party",
+              hint: expect.stringContaining("Multiple Telegram bots"),
+            }),
+          ]),
+        );
+        return "__skip__";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await expect(
+      runSetupChannels({} as OpenClawConfig, prompter, {
+        quickstartDefaults: true,
+      }),
+    ).resolves.toEqual({} as OpenClawConfig);
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select channel (QuickStart)" }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("includes Telegram Party in the standard channel picker used by configure", async () => {
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select a channel") {
+        const channelOptions = options as Array<{ value: string; label: string; hint?: string }>;
+        expect(channelOptions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              value: "__telegram_party__",
+              label: "Telegram Party",
+              hint: expect.stringContaining("Multiple Telegram bots"),
+            }),
+          ]),
+        );
+        return "__done__";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await expect(runSetupChannels({} as OpenClawConfig, prompter)).resolves.toEqual(
+      {} as OpenClawConfig,
+    );
+
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
   it("continues Telegram setup when the plugin registry is empty", async () => {
     // Simulate missing registry entries (the scenario reported in #25545).
     setActivePluginRegistry(createEmptyPluginRegistry());
